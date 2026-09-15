@@ -328,53 +328,56 @@ Isso reduz o acoplamento entre os serviços e melhora a capacidade do sistema de
 
 ---
 
-# 📈 Escalabilidade
+# 📈 Planejamento de Escalonamento
 
-Um dos principais objetivos do VoteFlow é lidar com picos repentinos de tráfego.
+O VoteFlow utilizará serviços serverless, permitindo ajustar a capacidade conforme o volume de votos sem manter servidores ativos continuamente.
 
-Imagine o seguinte cenário:
+## Escalonamento técnico
 
-```text
-Tráfego normal:
+A fila **Amazon SQS** funcionará como mecanismo de desacoplamento. Os votos recebidos pelo API Gateway serão armazenados na fila e processados por execuções concorrentes da **AWS Lambda**.
 
-100 votos/minuto
+O aumento da demanda será controlado por métricas como:
 
+* **Quantidade de mensagens na fila:** indica o acúmulo de votos aguardando processamento;
+* **Idade da mensagem mais antiga:** identifica atrasos no processamento;
+* **Concorrência e duração da Lambda:** mostram se a função precisa de mais execuções simultâneas ou memória;
+* **Erros e throttling:** indicam limites de capacidade ou falhas;
+* **Consumo de escrita do DynamoDB:** permite identificar sobrecarga nos contadores.
 
-Durante uma final:
+Inicialmente, serão utilizados **contadores atômicos no DynamoDB**. Em cenários de grande volume, poderão ser adotados **contadores distribuídos**, dividindo as escritas entre diferentes partições para evitar o problema de *hot partition*.
 
-100.000 votos/minuto
-```
+O escalonamento será ajustado da seguinte forma:
 
-Em uma arquitetura tradicional, esse pico poderia causar:
+* Se o backlog ou a idade das mensagens aumentar, a concorrência da Lambda será ampliada;
+* Se a fila permanecer vazia, a concorrência poderá ser reduzida;
+* Se a duração da função estiver alta, será avaliado o aumento de memória;
+* Se ocorrerem erros de limite no DynamoDB, as escritas serão redistribuídas ou a capacidade será ajustada.
 
-* Sobrecarga no servidor
-* Lentidão
-* Timeouts
-* Falhas
-* Perda de requisições
+## Custos e controle financeiro
 
-No VoteFlow, a fila funciona como uma camada de proteção:
+O custo será acompanhado considerando:
 
-```text
-           Pico de Votos
-                │
-                ▼
-         ┌─────────────┐
-         │ API Gateway │
-         └──────┬──────┘
-                │
-                ▼
-         ┌─────────────┐
-         │     SQS     │
-         │    Queue    │
-         └──────┬──────┘
-                │
-                ▼
-         Processamento
-         Assíncrono
-```
+* Requisições do **API Gateway**;
+* Operações de envio e leitura do **SQS**;
+* Execuções e tempo de processamento da **Lambda**;
+* Leituras e escritas do **DynamoDB**;
+* Logs e métricas do **CloudWatch**.
 
-Os votos podem continuar sendo recebidos enquanto o processamento ocorre de forma independente.
+Como os serviços são cobrados principalmente por uso, o custo tende a acompanhar a quantidade de votos processados. Entretanto, testes de carga, excesso de logs e configurações de alta concorrência podem aumentar os gastos.
+
+Será utilizado um orçamento de referência para monitorar o projeto. O custo por voto será estimado pela fórmula:
+
+$$
+\text{Custo por voto} =
+\frac{\text{Custo do API Gateway + SQS + Lambda + DynamoDB + CloudWatch}}
+{\text{Quantidade de votos processados}}
+$$
+
+Também serão configurados alertas de orçamento para identificar aumentos inesperados e interromper ou reduzir testes quando necessário.
+
+## Validação
+
+Serão realizados testes com volume normal, picos de acesso e situações de estresse. Durante os testes, serão analisados o tempo de processamento, o crescimento da fila, a taxa de erros, a recuperação após o pico e o custo por voto.
 
 ---
 
